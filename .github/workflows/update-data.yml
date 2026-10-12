@@ -1,0 +1,67 @@
+name: Update data
+
+on:
+  schedule:
+    - cron: "20 */6 * * *"   # every 6 hours (UTC)
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-data
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      # The raw SQLite file is too big for git, so keep it in the Actions cache between runs.
+      - name: Restore raw database
+        id: db
+        uses: actions/cache@v4
+        with:
+          path: data/pm25.db
+          key: pm25-db-${{ github.run_id }}
+          restore-keys: pm25-db-
+
+      - name: Collect data
+        env:
+          FIRMS_MAP_KEY: ${{ secrets.FIRMS_MAP_KEY }}
+        run: |
+          mkdir -p data
+          if [ -f data/pm25.db ]; then
+            python collect_airweather.py --recent
+            python collect_hotspots.py --start "$(date -u -d '10 days ago' +%F)"
+          else
+            echo "No cached database: full backfill from 2023-01-01"
+            python collect_airweather.py --start 2023-01-01
+            python collect_hotspots.py --start 2023-01-01
+          fi
+
+      - name: Build features and export app data
+        run: |
+          python build_features.py
+          python export_hotspots.py
+
+      - name: Commit updated CSVs
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/features.csv data/hotspots_app.csv
+          if git diff --cached --quiet; then
+            echo "no data changes"
+          else
+            git commit -m "chore: update data $(date -u +%F\ %H:%M) UTC"
+            git push
+          fi

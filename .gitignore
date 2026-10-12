@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.env
+.venv/
+# raw database is rebuilt by collect_*.py (too big for git); the app only needs the small CSVs below
+data/pm25.db
+data/model.joblib
